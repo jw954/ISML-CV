@@ -1,0 +1,342 @@
+import numpy as np
+import cv2
+from matplotlib import pyplot as plt
+import shutil
+import glob
+from UsefulFunctions import *
+import scipy.io as sio
+import os
+import scipy.linalg 
+from PIL import Image
+from opencv_distort import *
+
+mainFolder = "CalibFolder"
+
+folderNameLB = "calibrationPose1"
+folderNameUB = "calibrationPose2"
+formatName = 'png'
+H = 320
+W = 324
+doDistort = False
+################ Read in images and undistort them ###########################
+a = sio.loadmat("CalibParams_undist.mat")
+
+mtx = a['cameraMatrix']
+dist = a['dist']
+ret = a['retval']  
+
+names = [folderNameLB, folderNameUB]
+if doDistort:
+    for curName in names:
+    
+        folderName = "%s/%s" % (mainFolder, curName)
+    
+        outputFolderName = '%s_undistorted' % folderName
+        try:
+            shutil.rmtree(outputFolderName)
+            os.makedirs(outputFolderName)
+        except:
+            os.makedirs(outputFolderName)
+
+    
+        for x in glob.glob('%s/*.%s' % (folderName, formatName)):
+            curIm = cv2.imread(x, cv2.IMREAD_GRAYSCALE)
+        
+            bucket1 = curIm[:,:W]
+            bucket2 = curIm[:,W:]
+            newImage1 = cv2.undistort(bucket1, mtx, dist, None, mtx)
+            newImage2 = cv2.undistort(bucket2, mtx, dist, None, mtx)
+    
+    
+            cv2.imwrite(x.replace(folderName, outputFolderName), np.concatenate((newImage1, newImage2), axis=1))
+
+
+
+
+################ Fundamental Matrix Estimation ###########################
+def computeError(F, pts1,pts2):
+    
+    projectedLine_in1 = np.matmul(pts2, F.T)
+    projectedLine_in1 = projectedLine_in1 / np.tile(np.linalg.norm(projectedLine_in1[:,:2], axis = 1).reshape(-1,1), 3)
+    
+    alldist_1 = np.sum(projectedLine_in1 * pts1, axis = 1);
+    
+    alldist_1 = np.mean(np.abs(alldist_1))
+    
+    projectedLine_in2 = np.matmul(pts1, F)
+    projectedLine_in2 = projectedLine_in2 / np.tile(np.linalg.norm(projectedLine_in2[:,:2], axis = 1).reshape(-1,1), 3)
+        
+    alldist_2 = np.sum(projectedLine_in2 * pts2, axis = 1);
+    
+    alldist_2 = np.mean(np.abs(alldist_2))
+    
+    
+    curErr = np.max((alldist_2, alldist_1))
+    
+    
+    return curErr
+
+dual_y,dual_x= np.mgrid[1:(H+1),1:(W+1)].astype("uint16")
+
+if doDistort:
+    primal1_x,primal1_y = graycode("%s/%s_undistorted" % (mainFolder, folderNameLB), "FirstPos", verbose = True)
+    primal2_x,primal2_y = graycode("%s/%s_undistorted" % (mainFolder,folderNameUB), "FirstPos", verbose = True)
+else:
+    primal1_x,primal1_y = graycode("%s/%s" % (mainFolder, folderNameLB), "FirstPos", verbose = True)
+    primal2_x,primal2_y = graycode("%s/%s" % (mainFolder,folderNameUB), "FirstPos", verbose = True)
+
+#TRANSCRIBE THIS AS MATLAB
+
+gradientIm = np.stack((dual_x, primal1_x, primal2_x), axis = 2).astype("float") / (2**16-1);
+plt.imshow(64 *gradientIm);
+#Click 3 times
+
+x = plt.ginput(2, show_clicks = True)
+#x = [[60,10], [200,100]]
+print(x)
+plt.show()
+
+print(x[1][1])
+N = 10
+
+input_x = np.linspace(np.min((x[0][0], x[1][0])), np.max((x[0][0], x[1][0])), N).astype("int");
+input_y = np.linspace(np.min((x[0][1], x[1][1])), np.max((x[0][1], x[1][1])), N).astype("int");
+
+ind_y, ind_x = np.meshgrid(input_y -1, input_x - 1)
+
+primal_coordinates = [];
+dual_coordinates   = [];
+
+tmp_x = primal1_x[ind_y,ind_x];
+tmp_y = primal1_y[ind_y,ind_x];
+
+primal_coordinates1 = np.concatenate((tmp_x.reshape(N**2,-1), tmp_y.reshape(N**2,-1)), axis = 1)
+
+tmp_x = primal2_x[ind_y,ind_x];
+tmp_y = primal2_y[ind_y,ind_x];
+
+primal_coordinates2 = np.concatenate((tmp_x.reshape(N**2,-1), tmp_y.reshape(N**2,-1)), axis = 1)
+
+primal_coordinates = np.concatenate((primal_coordinates1,primal_coordinates2), axis = 0)
+
+tmp_x = dual_x[ind_y,ind_x];
+tmp_y = dual_y[ind_y,ind_x];
+
+dual_coordinates1 = np.concatenate((tmp_x.reshape(N**2,-1), tmp_y.reshape(N**2,-1)), axis = 1)
+
+
+dual_coordinates= np.concatenate((dual_coordinates1,dual_coordinates1), axis = 0)
+
+F, mask = cv2.findFundamentalMat(primal_coordinates,dual_coordinates,cv2.FM_RANSAC,0.5, 0.99999)
+
+pts1 = np.concatenate((dual_coordinates, np.ones((2*N**2, 1))), axis = 1).astype("float")
+pts2 = np.concatenate((primal_coordinates, np.ones((2*N**2, 1))), axis = 1).astype("float")
+
+matValues = np.matmul(np.matmul(pts1, F), pts2.T)
+
+print(np.trace(np.abs(matValues)) / matValues.shape[0])
+
+F2, mask = cv2.findFundamentalMat(primal_coordinates,dual_coordinates,cv2.FM_8POINT)
+
+matValues2 = np.matmul(np.matmul(pts1, F2), pts2.T)
+
+print(np.trace(np.abs(matValues2)) / matValues.shape[0])
+
+err1 = computeError(F,pts1,pts2)
+print(err1)
+
+err2 = computeError(F2,pts1,pts2)
+print(err2)
+
+#np.mean(diag([dual_coordinates ones(size(dual_coordinates,1),1)]*...
+#      F*[primal_coordinates ones(size(primal_coordinates,1),1)]'))
+
+if err1  < err2:
+    F = F2
+    
+sio.savemat("fundamentalmatrix.mat",{"F" : F}, {"dual_coordinates" : dual_coordinates}, {"primal_coordinates": primal_coordinates})
+
+
+return
+
+################# Generate Epipolar Masks ###########################
+
+a = sio.loadmat("fundamentalmatrix.mat")
+
+F= a["F"]
+# Pixel coordinates of both mask and projector
+#Read in image, need a path
+maskFolder = "Py_MaskPatterns"
+projFolder = "Py_ProjectorPatterns"
+
+try:
+    shutil.rmtree(maskFolder)
+    os.makedirs(maskFolder)
+except:
+    os.makedirs(maskFolder)
+    
+try:
+    shutil.rmtree(projFolder)
+    os.makedirs(projFolder)
+except:
+    os.makedirs(projFolder)
+    
+        
+        
+cam_H = 320;
+cam_W = 324;
+
+#os.makedirs(maskFolder, exist_ok=True)
+#os.makedirs(projFolder, exist_ok=True)
+flip = True #True means Horizontal?
+
+    
+# Apply graycodes to compute correspondence between camera pixels and
+# mask pixels.
+dual_y,dual_x = np.mgrid[1:(cam_H+1),1:(cam_W+1)].astype("uint16")
+
+coord_y, coord_x = dmdmeshgrid()
+
+
+
+# Compute index for each dual pixel.  Index is constant along an 
+# epipolar line.
+dual_coord = np.concatenate((dual_x.reshape(-1,1), dual_y.reshape(-1,1), np.ones_like(dual_x).reshape(-1,1)), axis = 1);
+
+tmp = np.matmul(dual_coord, F);
+if flip:
+    primal_coord = np.stack((np.zeros_like(tmp[:,1]), -tmp[:,2] / tmp[:,1], np.ones_like(tmp[:,1]))).T;
+    
+               
+    dual_ind = primal_coord[:,1].reshape(cam_H, cam_W)
+    
+    # Compute index for each primal pixel.  Index is constant along an 
+    # epipolar line.
+    # NOTE: This can probably be simplified, so revisit code/math.
+    primal_coord = np.concatenate((coord_x.reshape(-1,1), coord_y.reshape(-1,1), np.ones_like(coord_x).reshape(-1,1)), axis = 1);
+    
+    
+    tmp = np.matmul(primal_coord, F.T)
+    
+    dual_coord = np.stack((np.zeros_like(tmp[:,1]), -tmp[:,2] / tmp[:,1], np.ones_like(tmp[:,1]))).T;
+    
+    tmp = np.matmul(dual_coord,F);
+    
+    primal_coord = np.stack((np.zeros_like(tmp[:,1]), -tmp[:,2] / tmp[:,1], np.ones_like(tmp[:,1]))).T;
+                
+    primal_ind = primal_coord[:,1].reshape(684,608);
+
+else:
+    primal_coord = np.stack((-tmp[:,2] / tmp[:,0], np.zeros_like(tmp[:,1]), np.ones_like(tmp[:,1]))).T;
+    
+               
+    dual_ind = primal_coord[:,0].reshape(cam_H, cam_W)
+    
+    # Compute index for each primal pixel.  Index is constant along an 
+    # epipolar line.
+    # NOTE: This can probably be simplified, so revisit code/math.
+    primal_coord = np.concatenate((coord_x.reshape(-1,1), coord_y.reshape(-1,1), np.ones_like(coord_x).reshape(-1,1)), axis = 1);
+    
+    
+    tmp = np.matmul(primal_coord, F.T)
+    
+    dual_coord = np.stack(( -tmp[:,2] / tmp[:,0],np.zeros_like(tmp[:,1]), np.ones_like(tmp[:,1]))).T;
+    
+    tmp = np.matmul(dual_coord,F);
+    
+    primal_coord = np.stack(( -tmp[:,2] / tmp[:,0],np.zeros_like(tmp[:,1]), np.ones_like(tmp[:,1]))).T;
+                
+    primal_ind = primal_coord[:,0].reshape(684,608);
+
+#Recover discrete number M of unique indices
+M = 500;
+
+min_ind = np.min((np.min(primal_ind.flatten()),np.min(dual_ind.flatten())));
+max_ind = np.max((np.max(primal_ind.flatten()),np.max(dual_ind.flatten())));
+
+
+primal_ind = (primal_ind - min_ind) /(max_ind - min_ind);
+dual_ind   = (dual_ind   - min_ind) /(max_ind - min_ind);
+
+primal_ind = np.round(primal_ind * (M-1) + 1);
+dual_ind   = np.round(dual_ind   * (M-1) + 1);
+
+
+    
+iter = 0
+
+randshift = np.random.permutation(3) + 1;
+
+hada = scipy.linalg.hadamard(256);
+
+
+paddedIm = np.zeros((cam_H,512));
+for k in np.arange(1,97):
+    primal_val = np.zeros_like(coord_y);
+    dual_val   = np.zeros_like(dual_y);
+    
+    if np.mod(k,2) == 1:
+        primal_val = np.ones_like(coord_y);
+    
+    
+    if np.mod(k,6) == 0 : 
+        dual_val = np.zeros_like(dual_y);
+    
+    
+    if np.mod(k,6) == 2:
+        dual_val = np.zeros_like(dual_y);
+    
+    
+    cv2.imwrite('%s/%02d_PAT.bmp' % (projFolder, k-1), 255*primal_val)
+    
+    paddedIm[0:cam_H, 0: cam_W] = np.rot90(dual_val, 2);
+    
+    cv2.imwrite('%s/dual_%03d.bmp' % (maskFolder, k-1), 255*paddedIm)
+
+
+# Use twice as many columns from hadamard matrix since we can use all 96
+# patterns for indirect-only
+for k in np.arange(1,16):
+    for c in range(3):
+
+        val = np.max((hada[:,1], np.zeros_like(hada[:,1])), axis = 0)
+        val = cv2.resize(val,(0,0), fx=6, fy=6,interpolation=cv2.INTER_NEAREST);
+        val = val[:,0]
+        
+        
+        primal_val = val;
+        dual_val = 1 - val;
+        
+        primal_val = np.roll(primal_val, 2 *randshift[c], axis = 0);
+        dual_val   = np.roll(dual_val, 2 *randshift[c], axis = 0);
+        
+        #This will redistort the mask
+        dual_val = distortimage(dual_val[(dual_ind-1).astype("int")].astype('float32'), mtx, dist)
+        
+        a = primal_val[(primal_ind-1).astype("int")]
+        cv2.imwrite('%s/%02d_PAT.bmp' % (projFolder, iter),255*a)
+        
+        paddedIm[0:cam_H, 0: cam_W] = np.rot90(dual_val, 2);
+        
+        cv2.imwrite('%s/dual_%03d.bmp' % (maskFolder,iter), 255*paddedIm)
+        
+        iter = iter + 1;
+        
+        
+        primal_val = 1 - val;
+        dual_val = val;
+        
+        
+        primal_val = np.roll(primal_val, 2 *randshift[c], axis = 0);
+        dual_val   = np.roll(dual_val, 2 *randshift[c], axis = 0);
+        
+        #This will redistort the mask
+        dual_val = distortimage(dual_val[(dual_ind-1).astype("int")].astype('float32'), mtx, dist)
+        a = primal_val[(primal_ind-1).astype("int")]
+        cv2.imwrite('%s/%02d_PAT.bmp' % (projFolder, iter), 255*a)
+        
+        paddedIm[0:cam_H, 0: cam_W] = np.rot90(dual_val, 2);
+        
+        cv2.imwrite('%s/dual_%03d.bmp' % (maskFolder,iter),255*paddedIm)
+        
+        iter = iter + 1;
