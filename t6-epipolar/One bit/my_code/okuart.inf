@@ -1,0 +1,88 @@
+; Installation INF for the Opal Kelly USB Driver for Windows 2000/XP/Vista/7/8/10
+; Devices covered by this INF:
+;    ZEM5370-A5       VID:151F  PID:012F
+;
+
+; ================ Version section =================
+[Version]
+Signature = "$Windows NT$"
+Class = Ports
+ClassGuid = {4D36E978-E325-11CE-BFC1-08002BE10318}
+Provider = %OPALKELLY%
+CatalogFile = okuart.cat
+DriverVer = 04/17/2012, 2.3.0.1
+
+
+; ========== Manufacturer/Models sections =========== 
+[Manufacturer] 
+%PROVIDERNAME% = OpalKellyDevice,NTx86,NTamd64 
+
+[OpalKellyDevice.NTx86]
+%VID_151F&PID_012F.DEVICEDESC%=UART_Install, USB\VID_151F&PID_012F&MI_01, USB\VID_151F&PID_012F&MI_02
+
+[OpalKellyDevice.NTamd64]
+%VID_151F&PID_012F.DEVICEDESC%=UART_Install, USB\VID_151F&PID_012F&MI_01, USB\VID_151F&PID_012F&MI_02
+
+
+;------------------------------------------------------------------------------
+;  Windows 32bit OSes Section
+;------------------------------------------------------------------------------
+[UART_Install.NTx86] 
+include=mdmcpq.inf
+CopyFiles=FakeModemCopyFileSection 
+AddReg=UART_Install.nt.AddReg 
+
+[UART_Install.NTx86.AddReg] 
+HKR,,DevLoader,,*ntkern 
+HKR,,NTMPDriver,,usbser.sys 
+HKR,,EnumPropPages32,,"MsPorts.dll,SerialPortPropPageProvider" 
+
+[UART_Install.NTx86.Services]
+include=mdmcpq.inf 
+AddService=usbser, 0x00000002, DriverService_Install 
+
+
+;------------------------------------------------------------------------------
+;  Windows 64bit OSes Section
+;------------------------------------------------------------------------------
+[UART_Install.NTamd64]
+include=mdmcpq.inf
+CopyFiles=FakeModemCopyFileSection
+AddReg=UART_Install.NTamd64.AddReg 
+
+[UART_Install.NTamd64.AddReg] 
+HKR,,DevLoader,,*ntkern 
+HKR,,NTMPDriver,,usbser.sys 
+HKR,,EnumPropPages32,,"MsPorts.dll,SerialPortPropPageProvider" 
+
+[UART_Install.NTamd64.Services] 
+include=mdmcpq.inf 
+AddService=usbser, 0x00000002, DriverService_Install 
+
+
+;------------------------------------------------------------------------------
+;  Common Sections
+;------------------------------------------------------------------------------
+[DestinationDirs] 
+DefaultDestDir=12 
+
+[SourceDisksNames]
+
+[SourceDisksFiles]
+
+[FakeModemCopyFileSection]
+
+[DriverService_Install] 
+DisplayName=%SERVICENAME% 
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\usbser.sys 
+
+ 
+; ==================== Strings =====================
+[Strings]
+OPALKELLY="Opal Kelly"
+PROVIDERNAME="Opal Kelly"
+SERVICENAME="Opal Kelly UART Driver"
+VID_151F&PID_012F.DEVICEDESC="Opal Kelly ZEM5370-A5 UART"
